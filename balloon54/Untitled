@@ -1,0 +1,124 @@
+import { View, StyleSheet, PanResponder } from 'react-native';
+import { GLView } from 'expo-gl';
+import * as THREE from 'three';
+import { useRef, useCallback } from 'react';
+
+export default function App() {
+  const rotY = useRef(0.3);
+  const rotX = useRef(0.1);
+  const lastX = useRef(0);
+  const lastY = useRef(0);
+  const meshRef = useRef(null);
+
+  const panResponder = useRef(PanResponder.create({
+    onStartShouldSetPanResponder: () => true,
+    onPanResponderGrant: (e) => {
+      lastX.current = e.nativeEvent.pageX;
+      lastY.current = e.nativeEvent.pageY;
+    },
+    onPanResponderMove: (e) => {
+      rotY.current += (e.nativeEvent.pageX - lastX.current) * 0.013;
+      rotX.current += (e.nativeEvent.pageY - lastY.current) * 0.009;
+      lastX.current = e.nativeEvent.pageX;
+      lastY.current = e.nativeEvent.pageY;
+    },
+  })).current;
+
+  const onContextCreate = useCallback(async (gl) => {
+    const { drawingBufferWidth: w, drawingBufferHeight: h } = gl;
+
+    const renderer = new THREE.WebGLRenderer({
+      canvas: {
+        width: w, height: h,
+        style: {},
+        addEventListener: () => {},
+        removeEventListener: () => {},
+        clientHeight: h,
+        getContext: () => gl,
+      },
+      context: gl,
+    });
+    renderer.setSize(w, h);
+    renderer.setClearColor(0xf0e8d8, 1);
+
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(40, w / h, 0.1, 100);
+    camera.position.set(0, 0, 5);
+
+    scene.add(new THREE.AmbientLight(0xffffff, 0.4));
+    const key = new THREE.DirectionalLight(0xffffff, 2.2);
+    key.position.set(1, 2, 4); scene.add(key);
+    const fill = new THREE.DirectionalLight(0xffdddd, 0.5);
+    fill.position.set(-2, -1, 2); scene.add(fill);
+    const rim = new THREE.DirectionalLight(0xffffff, 1.0);
+    rim.position.set(0, -2, -3); scene.add(rim);
+
+    const L = 1.5, R = 0.16, N = 80;
+    const pts = [];
+    const capFrac = R / (L + R);
+
+    for (let i = 0; i <= N; i++) {
+      const t = i / N;
+      let x, r;
+      if (t < capFrac) {
+        const a = (t / capFrac) * (Math.PI / 2);
+        x = -L + R - R * Math.cos(a);
+        r = R * Math.sin(a);
+      } else if (t > 1 - capFrac) {
+        const a = ((1 - t) / capFrac) * (Math.PI / 2);
+        x = L - R + R * Math.cos(a);
+        r = R * Math.sin(a);
+      } else {
+        const tBody = (t - capFrac) / (1 - 2 * capFrac);
+        x = -L + R + tBody * 2 * (L - R);
+        r = R;
+      }
+      pts.push(new THREE.Vector2(Math.max(0.004, r), x));
+    }
+
+    const geo = new THREE.LatheGeometry(pts, 14);
+    geo.rotateZ(Math.PI / 2);
+
+    const mat = new THREE.MeshPhongMaterial({
+      color: new THREE.Color(0xcc2222),
+      specular: new THREE.Color(0xffffff),
+      shininess: 90,
+      transparent: true,
+      opacity: 0.65,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+    });
+
+    const balloon = new THREE.Mesh(geo, mat);
+    meshRef.current = balloon;
+    scene.add(balloon);
+
+    const kGeo = new THREE.SphereGeometry(0.03, 8, 8);
+    const kMat = new THREE.MeshPhongMaterial({ color: 0x880000 });
+    const knot = new THREE.Mesh(kGeo, kMat);
+    knot.position.set(L + R * 0.5, 0, 0);
+    balloon.add(knot);
+
+    const animate = () => {
+      requestAnimationFrame(animate);
+      if (meshRef.current) {
+        meshRef.current.rotation.y = rotY.current;
+        meshRef.current.rotation.x = rotX.current;
+      }
+      renderer.render(scene, camera);
+      gl.endFrameEXP();
+    };
+    animate();
+  }, []);
+
+  return (
+    <View style={styles.container} {...panResponder.panHandlers}>
+      <GLView style={styles.gl} onContextCreate={onContextCreate} />
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: { flex: 1, backgroundColor: '#f0e8d8' },
+  gl: { flex: 1 },
+});
