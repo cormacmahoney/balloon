@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { PanResponder, StyleSheet, Text, View } from 'react-native';
+import { Animated, PanResponder, StyleSheet, Text, View } from 'react-native';
 import { GLView } from 'expo-gl';
+import { Audio } from 'expo-av';
 import * as THREE from 'three';
 
 const BALLOON_RADIUS = 0.18;
@@ -10,7 +11,8 @@ const PINCH_DISTANCE_TO_FULL_INFLATION = 240;
 const DRAG_SCENE_UNITS_PER_PIXEL = 0.01;
 const ROTATE_RADIANS_PER_PIXEL = 0.01;
 const TAP_MOVEMENT_THRESHOLD = 10;
-const modes = ['inflate', 'move', 'rotate'];
+const TARGET_INFLATION = 0.82;
+const SNAP_OVERSHOOT = 1.35;
 
 const clamp = (value, min, max) => Math.min(Math.max(value, min), max);
 const lerp = (from, to, amount) => from + (to - from) * amount;
@@ -38,26 +40,22 @@ const buildBalloonProfile = (bodyHeight) => {
   const points = [];
   const tipRadius = 0.01;
   const capSegments = 8;
-
   for (let i = 0; i <= capSegments; i++) {
     const angle = (i / capSegments) * (Math.PI / 2);
     const x = BALLOON_RADIUS * Math.sin(angle);
     const y = tipRadius + BALLOON_RADIUS * (1 - Math.cos(angle));
     points.push(new THREE.Vector2(x, y));
   }
-
   const bodySegments = 12;
   for (let i = 1; i <= bodySegments; i++) {
     points.push(new THREE.Vector2(BALLOON_RADIUS, BALLOON_RADIUS + (bodyHeight * i) / bodySegments));
   }
-
   for (let i = 0; i <= capSegments; i++) {
     const angle = (i / capSegments) * (Math.PI / 2);
     const x = BALLOON_RADIUS * Math.cos(angle);
     const y = BALLOON_RADIUS + bodyHeight + BALLOON_RADIUS * Math.sin(angle);
     points.push(new THREE.Vector2(x, y));
   }
-
   return points;
 };
 
@@ -73,16 +71,33 @@ const ensureThreeDocumentShim = () => {
   };
 };
 
+const playBoingSound = async () => {
+  try {
+    await Audio.setAudioModeAsync({ playsInSilentModeIOS: true });
+    const { sound } = await Audio.Sound.createAsync(
+      { uri: 'https://cdn.freesound.org/previews/352/352586_5121236-lq.mp3' },
+      { shouldPlay: true, volume: 0.7 }
+    );
+    sound.setOnPlaybackStatusUpdate((status) => {
+      if (status.didJustFinish) sound.unloadAsync();
+    });
+  } catch (e) {}
+};
+
 export default function App() {
   const sceneRef = useRef(null);
   const inflationRef = useRef(0);
   const [mode, setMode] = useState('inflate');
   const modeRef = useRef('inflate');
+  const buildModeRef = useRef(false);
+  const snapAnimRef = useRef(null);
+  const snapTriggeredRef = useRef(false);
   const gestureMode = useRef(null);
   const dragStart = useRef({ pageX: 0, pageY: 0, positionX: 0, positionY: 0, rotationX: 0, rotationY: 0 });
   const tapStart = useRef({ pageX: 0, pageY: 0, moved: false });
   const pinchStart = useRef({ distance: 0, angle: 0, inflation: 0, lastAngle: 0 });
   const springFrameRef = useRef(null);
+  const flashAnim = useRef(new Animated.Value(0)).current;
 
   const stopRotationSpring = useCallback(() => {
     if (springFrameRef.current !== null) {
@@ -93,14 +108,17 @@ export default function App() {
 
   const cycleMode = useCallback(() => {
     setMode((currentMode) => {
-      const nextMode = modes[(modes.indexOf(currentMode) + 1) % modes.length];
+      const available = buildModeRef.current
+        ? ['build', 'move', 'rotate']
+        : ['inflate', 'move', 'rotate'];
+      const nextMode = available[(available.indexOf(currentMode) + 1) % available.length];
       modeRef.current = nextMode;
       return nextMode;
     });
   }, []);
 
   const updateInflation = useCallback((inflation) => {
-    inflationRef.current = clamp(inflation, 0, 1);
+    inflationRef.current = clamp(inflation, 0, SNAP_OVERSHOOT);
     const sceneObjects = sceneRef.current;
     if (!sceneObjects) return;
     const bodyHeight = inflationRef.current * MAX_BODY_HEIGHT;
@@ -109,6 +127,49 @@ export default function App() {
     sceneObjects.balloonMesh.geometry = new THREE.LatheGeometry(points, RADIAL_SEGMENTS);
     sceneObjects.balloon.position.y = -(BALLOON_RADIUS + bodyHeight / 2);
   }, []);
+
+  const triggerSnapToBuild = useCallback(() => {
+    if (snapTriggeredRef.current) return;
+    snapTriggeredRef.current = true;
+
+    playBoingSound();
+
+    Animated.sequence([
+      Animated.timing(flashAnim, { toValue: 1, duration: 80, useNativeDriver: true }),
+      Animated.timing(flashAnim, { toValue: 0.6, duration: 100, useNativeDriver: true }),
+      Animated.timing(flashAnim, { toValue: 0.9, duration: 80, useNativeDriver: true }),
+      Animated.timing(flashAnim, { toValue: 0, duration: 400, useNativeDriver: true }),
+    ]).start();
+
+    let current = inflationRef.current;
+    let velocity = 0.08;
+    const target = TARGET_INFLATION;
+    const stiffness = 0.15;
+    const damping = 0.6;
+
+    const step = () => {
+      const delta = target - current;
+      const acceleration = delta * stiffness;
+      velocity = velocity * damping + acceleration;
+      current = current + velocity;
+      updateInflation(current);
+      if (Math.abs(delta) < 0.002 && Math.abs(velocity) < 0.001) {
+        updateInflation(TARGET_INFLATION);
+        buildModeRef.current = true;
+        setMode('build');
+        modeRef.current = 'build';
+        snapAnimRef.current = null;
+        return;
+      }
+      snapAnimRef.current = requestAnimationFrame(step);
+    };
+    snapAnimRef.current = requestAnimationFrame(step);
+  }, [updateInflation, flashAnim]);
+
+  const checkInflationTarget = useCallback((inflation) => {
+    if (snapTriggeredRef.current) return;
+    if (inflation >= TARGET_INFLATION - 0.02) triggerSnapToBuild();
+  }, [triggerSnapToBuild]);
 
   const springRotateYHome = useCallback(() => {
     stopRotationSpring();
@@ -170,7 +231,6 @@ export default function App() {
         const { touches } = event.nativeEvent;
         const sceneObjects = sceneRef.current;
         if (!sceneObjects) return;
-
         if (touches.length >= 2) {
           tapStart.current.moved = true;
           if (gestureMode.current !== 'pinch') beginPinch(touches);
@@ -182,7 +242,10 @@ export default function App() {
             const nextInflation = clamp(
               pinchStart.current.inflation + distanceDelta / PINCH_DISTANCE_TO_FULL_INFLATION, 0, 1
             );
-            updateInflation(nextInflation);
+            if (!buildModeRef.current) {
+              updateInflation(nextInflation);
+              checkInflationTarget(nextInflation);
+            }
             sceneObjects.balloonRig.rotation.z += angleDelta;
           } else if (currentMode === 'rotate') {
             sceneObjects.balloonRig.rotation.z += angleDelta;
@@ -190,7 +253,6 @@ export default function App() {
           pinchStart.current.lastAngle = currentAngle;
           return;
         }
-
         if (touches.length === 1) {
           if (gestureMode.current !== 'drag') beginDrag(touches[0]);
           const deltaX = touches[0].pageX - dragStart.current.pageX;
@@ -222,8 +284,9 @@ export default function App() {
     return () => {
       stopRotationSpring();
       if (sceneRef.current?.frameId) cancelAnimationFrame(sceneRef.current.frameId);
+      if (snapAnimRef.current) cancelAnimationFrame(snapAnimRef.current);
       sceneRef.current?.balloonMesh.geometry.dispose();
-      sceneRef.current?.outerMaterial.dispose();
+      sceneRef.current?.balloonMaterial.dispose();
       sceneRef.current?.renderer.dispose();
       sceneRef.current = null;
     };
@@ -231,19 +294,16 @@ export default function App() {
 
   const onContextCreate = useCallback((gl) => {
     ensureThreeDocumentShim();
-
     const scene = new THREE.Scene();
     const camera = new THREE.PerspectiveCamera(40, gl.drawingBufferWidth / gl.drawingBufferHeight, 0.1, 100);
     camera.position.z = 6;
-    camera.lookAt(0, 1, 0);
-
+    camera.lookAt(0, 0, 0);
     const renderer = new THREE.WebGLRenderer({ context: gl, antialias: true });
     renderer.setSize(gl.drawingBufferWidth, gl.drawingBufferHeight);
     renderer.setClearColor(0xffffff, 1);
     renderer.sortObjects = true;
-
     scene.add(new THREE.AmbientLight(0xffffff, 1.0));
-    const outerMaterial = new THREE.ShaderMaterial({
+    const balloonMaterial = new THREE.ShaderMaterial({
       uniforms: {
         uColor: { value: new THREE.Color(0xee2211) },
         uCenter: { value: new THREE.Color(0xffffff) },
@@ -280,41 +340,33 @@ export default function App() {
       `,
       side: THREE.FrontSide,
     });
-
     const balloonRig = new THREE.Group();
     const balloon = new THREE.Group();
     const balloonGeometry = new THREE.LatheGeometry(buildBalloonProfile(0.001), RADIAL_SEGMENTS);
-    const balloonMesh = new THREE.Mesh(balloonGeometry, outerMaterial);
+    const balloonMesh = new THREE.Mesh(balloonGeometry, balloonMaterial);
     balloon.add(balloonMesh);
     balloonRig.add(balloon);
     scene.add(balloonRig);
-
-    sceneRef.current = {
-      balloon,
-      balloonMesh,
-      balloonRig,
-      camera,
-      frameId: null,
-      outerMaterial,
-      renderer,
-      scene,
-    };
-
+    sceneRef.current = { balloon, balloonMesh, balloonMaterial, balloonRig, camera, frameId: null, renderer, scene };
     updateInflation(inflationRef.current);
-
     const render = () => {
       if (!sceneRef.current) return;
       renderer.render(scene, camera);
       gl.endFrameEXP();
       sceneRef.current.frameId = requestAnimationFrame(render);
     };
-
     render();
   }, [updateInflation]);
+
+  const flashBg = flashAnim.interpolate({
+    inputRange: [0, 0.5, 1],
+    outputRange: ['rgba(255,255,255,0)', 'rgba(255,180,150,0.6)', 'rgba(255,255,255,0.9)'],
+  });
 
   return (
     <View style={styles.container} {...pan.panHandlers}>
       <GLView style={styles.glView} onContextCreate={onContextCreate} />
+      <Animated.View pointerEvents="none" style={[styles.flashOverlay, { backgroundColor: flashBg }]} />
       <View pointerEvents="none" style={styles.modeIndicator}>
         <Text style={styles.modeText}>{mode}</Text>
       </View>
@@ -323,23 +375,9 @@ export default function App() {
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#ffffff',
-  },
-  glView: {
-    flex: 1,
-  },
-  modeIndicator: {
-    position: 'absolute',
-    bottom: 32,
-    left: 0,
-    right: 0,
-    alignItems: 'center',
-  },
-  modeText: {
-    color: '#222222',
-    fontSize: 12,
-    opacity: 0.6,
-  },
+  container: { flex: 1, backgroundColor: '#ffffff' },
+  glView: { flex: 1 },
+  flashOverlay: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 },
+  modeIndicator: { position: 'absolute', bottom: 32, left: 0, right: 0, alignItems: 'center' },
+  modeText: { color: '#222222', fontSize: 12, opacity: 0.6 },
 });
