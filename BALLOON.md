@@ -317,62 +317,111 @@ This project follows the **CONSTITUTION.md** protocol:
 *When uncertain, ask. When asked, answer.*
 
 ---
-also this:
-
-STRICT ENGINEERING MODE
-
-Your job is to implement ONLY the explicitly requested change.
-
-Constraints:
-- Minimal diff only
-- Preserve architecture
-- No opportunistic refactors
-- No speculative improvements
-- No new dependencies without approval
-- No file renames/moves
-- No style rewrites
-- No hidden behavior changes
-
-Process:
-1. Restate task
-2. List assumptions
-3. List files touched
-4. Explain exact modifications
-5. Identify risks
-6. WAIT FOR APPROVAL before coding
-
-When coding:
-- prefer surgical edits
-- preserve existing patterns
-- avoid abstractions unless necessary
-- keep changes localized
-
-After coding:
-- summarize blast radius
-- list possible regressions
-- list follow-up improvements separately
-
-Non-goals:
-- no caching
-- no auth redesign
-- no UI changes
-- no retry system
-- no performance optimization
-
-Label all assumptions explicitly.
-Do not convert assumptions into implementation decisions silently.
-
-Act as:
-1. IMPLEMENTER
-2. REVIEWER
-
-IMPLEMENTER writes minimal code.
-REVIEWER critiques for:
-- scope drift
-- hidden side effects
-- unnecessary abstractions
-- architecture violations
-
 
 *The game is called BALLOON until it earns a better name.*
 *Last updated: May 25, 2026*
+CURRENT BUILD STATE
+Last session: May 27, 2026
+Build: build_003
+GitHub: https://github.com/cormacmahoney/balloon — pushed
+Active project: ~/balloon54_fresh (NOT ~/balloon54 — that folder is corrupted with nested project and native build artifacts, do not use)
+What works:
+
+Single 260Q balloon rendering in 3D via Three.js + expo-gl
+ShaderMaterial — translucent jewel look, bright center fading to dark edges, specular highlight
+LatheGeometry — seamless single mesh, no caps, no seams
+Inflates from bottom upward
+Three gesture modes (tap to cycle): inflate / move / rotate
+Inflate: two-finger pinch/spread
+Move: single finger translates
+Rotate: single finger rotates X and Y, two-finger twist rotates Z
+Snap animation: balloon springs to build size when target inflation reached
+Build mode: inflate becomes build after snap, inflation locked
+Screen flash on snap
+expo-av installed, boing sound plays on snap (needs refinement)
+White background
+
+What needs work:
+
+Snap/build animation is too subtle and too fast — needs to be a WOW cartoon moment, Doughboy energy
+Boing sound needs refinement
+Balloon starts slightly off-center — camera.lookAt needs tuning
+No twist/pinch mechanic yet
+No twist point dimples yet
+No color palette yet — only red
+No multiple balloons yet
+No AI riddle or judge yet
+No gallery or scoring yet
+
+
+NEXT ACTION
+Xcode 26.5 + iOS 26.5 Simulator downloading (8.5GB). When complete:
+
+Build native app via Xcode — open ~/balloon54_fresh/ios/balloon54.xcworkspace, select iPhone, hit Play
+Verify native build works and hot reload is fast
+Implement dimple/twist mechanic — one twist point at 0.45, Doughboy feel
+
+Dimple mechanic architecture (ready to code):
+
+Single twist point at normalized position 0.45
+Gaussian radius reduction in buildBalloonProfile centered on twist point
+Three states: dormant (depth=0), active (depth=0.3, soft glow), twisted (depth=1.0, splits to two segments)
+Proximity detection: start with screen-center detection, add precise projection after visual is verified
+Spring animation on yield and release — warm, bouncy, not harsh
+Glow: ShaderMaterial uDimpleT uniform, warm highlight at twist point position
+
+
+LESSONS LOG ADDITIONS
+May 2026 — The nested project disaster:
+
+expo run:ios created ~/balloon54/balloon54/ nested project with its own App.js
+Cursor edited balloon54/App.js, Expo ran balloon54/balloon54/App.js — three hours of nothing
+Fix: always verify with find ~ -name "App.js" | grep balloon if changes aren't reflecting
+Active project is ALWAYS balloon54_fresh — cloned clean from GitHub
+Never run expo run:ios from a project that isn't the intended root
+Before any session: confirm which App.js Expo is serving
+
+May 2026 — Xcode and native builds:
+
+expo run:ios requires CocoaPods (install via Homebrew, not Gem) and Xcode
+Xcode 26.5 on macOS Tahoe 26.4.1 — devicectl has compatibility issues with Expo CLI
+Solution: open .xcworkspace directly in Xcode, select device, hit Play
+iOS 26.5 Simulator = 8.5GB download — plan ahead
+Native build eliminates all Expo Go cache issues permanently
+
+May 2026 — ShaderMaterial breakthrough:
+
+MeshPhysicalMaterial transmission crashes expo-gl (renderbufferStorageMultisample not implemented)
+MeshPhongMaterial opacity looks flat and clinical, not like a balloon
+DataTexture approach fails because LatheGeometry UV wrapping goes around the circumference not across it
+ShaderMaterial is the correct solution — bypasses UV entirely, works in view space
+The RxHaus orb technique: bright center (facing camera) fading to dark edges (facing away) via dot(normal, viewDir)
+This creates the jewel/translucent illusion without actual transparency
+Key uniform: uCenter (near white), uDark (deep saturated), gaussian mix based on facing angle
+
+May 2026 — On not being a cowboy:
+
+The worst sessions happened when Claude wrote code to appear helpful rather than to solve the actual problem
+Right question before any prompt: "am I confident this will work, and why" — if why is vague, stop
+Screen space projection (3D → 2D touch detection) is a known risk — test in isolation first
+When the visual target is clear, describe the mechanism before writing the shader
+"Clean, surgical, robust" means one thing at a time, verified before the next thing starts
+When Cormac says STOP — stop. When he says cc — confirm. Non-negotiable
+Honest confidence levels: state them. "80% on geometry, 60% on projection" is useful. Silence is not
+Waiting for right conditions is not laziness. It's how you avoid fishing
+The balloon is undifferentiated potential. The twist is the act of distinction. Don't twist before you're ready.
+
+May 2026 — Game design clarifications:
+
+Easy mode: predetermined twist points, guided builds, blueprint library, daily new shapes
+Hard mode: metaphorical riddles, balloon count only as parameter
+Creative mode: oblique riddles, open canvas — built last
+Difficulty lives in interpretation, never the interface — same gestures at every level
+The shape space is generative not fixed — shape grammar engine + Claude riddle generation = infinite puzzles
+Same geometry reads differently under different riddles — reframing is the content
+Blueprint library serves easy mode only — hard and creative need no blueprints
+Snap animation when correct inflation reached — cartoon overshoot, bouncy settle, warm flash
+Dimple twist points: invisible until proximity, yield like Doughboy on touch, spring back on release
+The 'oh' moment is AI recognition of specific creation — "that's the loneliest dog I've ever seen"
+
+ALWAYS USE CODE BLOCKS- saves a lot of time.
